@@ -1,47 +1,195 @@
 <!DOCTYPE html>
 <html>
 <head>
-<title>XTTS Voice Clone</title>
+
+<title>XTTS Voice Studio</title>
+
 <style>
-body{font-family:Arial;background:#111;color:white;text-align:center;padding:40px}
-.box{background:#1e1e1e;padding:20px;border-radius:10px;margin:20px auto;width:400px}
-button{padding:10px 20px;background:#6c63ff;color:white;border:none;border-radius:5px}
+
+body{
+background:#0f172a;
+font-family:system-ui;
+color:white;
+margin:0;
+}
+
+header{
+padding:20px;
+font-size:22px;
+font-weight:600;
+border-bottom:1px solid #222;
+}
+
+.container{
+display:flex;
+height:90vh;
+}
+
+.sidebar{
+width:260px;
+background:#111827;
+padding:20px;
+overflow:auto;
+}
+
+.voice{
+padding:10px;
+border-radius:8px;
+background:#1f2937;
+margin-bottom:10px;
+cursor:pointer;
+}
+
+.voice:hover{
+background:#374151;
+}
+
+.main{
+flex:1;
+padding:40px;
+}
+
+textarea{
+width:100%;
+height:160px;
+background:#1e293b;
+border:none;
+border-radius:10px;
+padding:15px;
+color:white;
+font-size:16px;
+}
+
+button{
+background:#6366f1;
+border:none;
+padding:12px 20px;
+border-radius:8px;
+color:white;
+font-size:16px;
+margin-top:20px;
+cursor:pointer;
+}
+
+audio{
+margin-top:30px;
+width:100%;
+}
+
+.upload{
+margin-top:30px;
+}
+
 </style>
+
 </head>
 
 <body>
 
-<h1>XTTS Voice Cloning</h1>
+<header>
 
-<div class="box">
+XTTS Voice Studio
 
-<h3>1️⃣ Subir voz</h3>
+</header>
 
-<form action="/clone" method="post" enctype="multipart/form-data">
-<input type="file" name="file">
-<br><br>
-<button>Clonar voz</button>
-</form>
+<div class="container">
+
+<div class="sidebar">
+
+<h3>Voices</h3>
+
+<div id="voices"></div>
+
+<div class="upload">
+
+<input type="file" id="voiceUpload">
+
+<button onclick="uploadVoice()">Upload Voice</button>
+
+</div>
 
 </div>
 
-<div class="box">
+<div class="main">
 
-<h3>2️⃣ Generar audio</h3>
+<h2>Text to Speech</h2>
 
-<form action="/tts" method="post">
+<textarea id="text"></textarea>
 
-<input name="voice_id" placeholder="voice_id"><br><br>
+<br>
 
-<textarea name="text" placeholder="Texto a generar" rows="4"></textarea>
+<button onclick="generate()">Generate</button>
 
-<br><br>
-
-<button>Generar</button>
-
-</form>
+<audio id="player" controls></audio>
 
 </div>
+
+</div>
+
+<script>
+
+let selectedVoice="default"
+
+async function loadVoices(){
+
+let res=await fetch("/voices")
+
+let data=await res.json()
+
+let container=document.getElementById("voices")
+
+container.innerHTML=""
+
+data.forEach(v=>{
+
+let div=document.createElement("div")
+
+div.className="voice"
+
+div.innerText=v
+
+div.onclick=()=>{
+
+selectedVoice=v
+
+}
+
+container.appendChild(div)
+
+})
+
+}
+
+async function generate(){
+
+let text=document.getElementById("text").value
+
+let player=document.getElementById("player")
+
+player.src="/stream?voice="+selectedVoice+"&text="+encodeURIComponent(text)
+
+player.play()
+
+}
+
+async function uploadVoice(){
+
+let file=document.getElementById("voiceUpload").files[0]
+
+let form=new FormData()
+
+form.append("file",file)
+
+await fetch("/clone",{method:"POST",body:form})
+
+loadVoices()
+
+}
+
+loadVoices()
+
+</script>
 
 </body>
+
 </html>
