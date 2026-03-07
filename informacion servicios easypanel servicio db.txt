@@ -1,0 +1,21 @@
+miniio
+
+usuario
+cabreu-ai
+
+password
+CA$1638466v
+
+
+postgres
+
+Nombre del servicio
+	biblia-ai-audio-mini-io
+Nombre de la base de datos
+	biblia-ai-biblia-ai-audio-mini-io
+Usuario
+	cabreuai
+
+Contraseña
+	CA$1638466v
+	

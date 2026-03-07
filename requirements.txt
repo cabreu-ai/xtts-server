@@ -1,9 +1,12 @@
-TTS==0.22.0
 fastapi
 uvicorn
 python-multipart
 jinja2
-
+TTS==0.22.0
 torch==2.1.2
 torchaudio==2.1.2
 transformers==4.36.2
+boto3
+sqlalchemy
+psycopg2-binary
+python-dotenv
