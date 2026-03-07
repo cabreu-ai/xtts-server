@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>XTTS Voice Clone</title>
+<style>
+body{font-family:Arial;background:#111;color:white;text-align:center;padding:40px}
+.box{background:#1e1e1e;padding:20px;border-radius:10px;margin:20px auto;width:400px}
+button{padding:10px 20px;background:#6c63ff;color:white;border:none;border-radius:5px}
+</style>
+</head>
+
+<body>
+
+<h1>XTTS Voice Cloning</h1>
+
+<div class="box">
+
+<h3>1️⃣ Subir voz</h3>
+
+<form action="/clone" method="post" enctype="multipart/form-data">
+<input type="file" name="file">
+<br><br>
+<button>Clonar voz</button>
+</form>
+
+</div>
+
+<div class="box">
+
+<h3>2️⃣ Generar audio</h3>
+
+<form action="/tts" method="post">
+
+<input name="voice_id" placeholder="voice_id"><br><br>
+
+<textarea name="text" placeholder="Texto a generar" rows="4"></textarea>
+
+<br><br>
+
+<button>Generar</button>
+
+</form>
+
+</div>
+
+</body>
+</html>
