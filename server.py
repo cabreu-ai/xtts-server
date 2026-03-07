@@ -16,7 +16,7 @@ app = FastAPI()
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-    with open("index.html") as f:
+    with open("/templates/index.html") as f:
         return f.read()
 
 # ======================
