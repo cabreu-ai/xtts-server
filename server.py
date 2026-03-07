@@ -4,24 +4,26 @@ import hashlib
 import tempfile
 
 from fastapi import FastAPI, UploadFile
-from fastapi.responses import JSONResponse
-
+from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel
 
 from TTS.api import TTS
 
 import boto3
-
 from sqlalchemy import create_engine, text
 
 app = FastAPI()
+
+@app.get("/", response_class=HTMLResponse)
+def home():
+    with open("index.html") as f:
+        return f.read()
 
 # ======================
 # CONFIG
 # ======================
 
 VOICE_DIR = "/app/voices"
-
 MODEL = "tts_models/multilingual/multi-dataset/xtts_v2"
 
 os.makedirs(VOICE_DIR, exist_ok=True)
@@ -31,9 +33,7 @@ os.makedirs(VOICE_DIR, exist_ok=True)
 # ======================
 
 print("Loading XTTS...")
-
 tts = TTS(MODEL)
-
 print("XTTS ready")
 
 # ======================
@@ -41,14 +41,13 @@ print("XTTS ready")
 # ======================
 
 s3 = boto3.client(
- "s3",
- endpoint_url=os.getenv("MINIO_ENDPOINT"),
- aws_access_key_id=os.getenv("MINIO_ACCESS_KEY"),
- aws_secret_access_key=os.getenv("MINIO_SECRET_KEY")
+    "s3",
+    endpoint_url=os.getenv("MINIO_ENDPOINT"),
+    aws_access_key_id=os.getenv("MINIO_ACCESS_KEY"),
+    aws_secret_access_key=os.getenv("MINIO_SECRET_KEY")
 )
 
 BUCKET = os.getenv("MINIO_BUCKET")
-
 PUBLIC_URL = os.getenv("MINIO_PUBLIC_URL")
 
 # ======================
@@ -56,7 +55,6 @@ PUBLIC_URL = os.getenv("MINIO_PUBLIC_URL")
 # ======================
 
 DB_URL = f"postgresql://{os.getenv('POSTGRES_USER')}:{os.getenv('POSTGRES_PASSWORD')}@{os.getenv('POSTGRES_HOST')}/{os.getenv('POSTGRES_DB')}"
-
 engine = create_engine(DB_URL)
 
 # ======================
@@ -64,143 +62,223 @@ engine = create_engine(DB_URL)
 # ======================
 
 class VerseRequest(BaseModel):
+    bible:str
+    book:str
+    chapter:int
+    verse:int
+    voice:str
+    language:str
+    text:str
 
- bible:str
- book:str
- chapter:int
- verse:int
- voice:str
- language:str
- text:str
+class ChatRequest(BaseModel):
+    message:str
+    voice:str
+    language:str="es"
+
+class DynamicReading(BaseModel):
+    bible:str
+    voice:str
+    language:str
+    verses:list
 
 # ======================
 # HASH
 # ======================
 
 def generate_hash(req):
-
- key="|".join([
-  req.bible,
-  req.book,
-  str(req.chapter),
-  str(req.verse),
-  req.voice,
-  req.language,
-  req.text
- ])
-
- return hashlib.sha256(key.encode()).hexdigest()
+    key="|".join([
+        req.bible,
+        req.book,
+        str(req.chapter),
+        str(req.verse),
+        req.voice,
+        req.language,
+        req.text
+    ])
+    return hashlib.sha256(key.encode()).hexdigest()
 
 # ======================
 # LIST VOICES
 # ======================
 
 @app.get("/voices")
-
 def voices():
-
- return os.listdir(VOICE_DIR)
+    return os.listdir(VOICE_DIR)
 
 # ======================
-# GENERATE AUDIO
+# STREAM (sin cache)
+# ======================
+
+@app.get("/stream")
+def stream(text:str,voice:str="default",language:str="es"):
+
+    voice_path=f"{VOICE_DIR}/{voice}"
+
+    with tempfile.NamedTemporaryFile(suffix=".mp3",delete=False) as tmp:
+
+        tts.tts_to_file(
+            text=text,
+            speaker_wav=voice_path,
+            language=language,
+            file_path=tmp.name
+        )
+
+        return JSONResponse({"audio_file":tmp.name})
+
+# ======================
+# GENERATE AUDIO (cache)
 # ======================
 
 @app.post("/verse-audio")
-
 def generate(req:VerseRequest):
 
- h=generate_hash(req)
+    h=generate_hash(req)
 
- with engine.connect() as conn:
+    with engine.connect() as conn:
 
-  row=conn.execute(
-   text("SELECT audio_url FROM tts_audio WHERE hash=:h"),
-   {"h":h}
-  ).fetchone()
+        row=conn.execute(
+            text("SELECT audio_url FROM tts_audio WHERE hash=:h"),
+            {"h":h}
+        ).fetchone()
 
- if row:
+    if row:
+        return {"audio_url":row[0],"cached":True}
 
-  return {"audio_url":row[0],"cached":True}
+    voice_path=f"{VOICE_DIR}/{req.voice}"
 
- voice_path=f"{VOICE_DIR}/{req.voice}"
+    with tempfile.NamedTemporaryFile(suffix=".mp3") as tmp:
 
- with tempfile.NamedTemporaryFile(suffix=".mp3") as tmp:
+        tts.tts_to_file(
+            text=req.text,
+            speaker_wav=voice_path,
+            language=req.language,
+            file_path=tmp.name
+        )
 
-  tts.tts_to_file(
-   text=req.text,
-   speaker_wav=voice_path,
-   language=req.language,
-   file_path=tmp.name
-  )
+        object_name=f"{h}.mp3"
 
-  object_name=f"{h}.mp3"
+        s3.upload_file(tmp.name,BUCKET,object_name)
 
-  s3.upload_file(tmp.name,BUCKET,object_name)
+    url=f"{PUBLIC_URL}/{object_name}"
 
- url=f"{PUBLIC_URL}/{object_name}"
+    with engine.connect() as conn:
 
- with engine.connect() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO tts_audio
+                (id,bible,book,chapter,verse,voice,language,hash,audio_url)
+                VALUES
+                (:id,:b,:bo,:c,:v,:vo,:l,:h,:u)
+            """),
+            {
+                "id":str(uuid.uuid4()),
+                "b":req.bible,
+                "bo":req.book,
+                "c":req.chapter,
+                "v":req.verse,
+                "vo":req.voice,
+                "l":req.language,
+                "h":h,
+                "u":url
+            }
+        )
 
-  conn.execute(
-   text("""
-    INSERT INTO tts_audio
-    (id,bible,book,chapter,verse,voice,language,hash,audio_url)
-    VALUES
-    (:id,:b,:bo,:c,:v,:vo,:l,:h,:u)
-   """),
-   {
-    "id":str(uuid.uuid4()),
-    "b":req.bible,
-    "bo":req.book,
-    "c":req.chapter,
-    "v":req.verse,
-    "vo":req.voice,
-    "l":req.language,
-    "h":h,
-    "u":url
-   }
-  )
-
- return {"audio_url":url,"cached":False}
+    return {"audio_url":url,"cached":False}
 
 # ======================
 # GENERATE CHAPTER
 # ======================
 
 @app.post("/generate-chapter")
-
 def generate_chapter(data):
 
- results=[]
+    results=[]
 
- for verse in data["verses"]:
+    for verse in data["verses"]:
 
-  req=VerseRequest(
-   bible=data["bible"],
-   book=data["book"],
-   chapter=data["chapter"],
-   verse=verse["verse"],
-   voice=data["voice"],
-   language=data["language"],
-   text=verse["text"]
-  )
+        req=VerseRequest(
+            bible=data["bible"],
+            book=data["book"],
+            chapter=data["chapter"],
+            verse=verse["verse"],
+            voice=data["voice"],
+            language=data["language"],
+            text=verse["text"]
+        )
 
-  results.append(generate(req))
+        results.append(generate(req))
 
- return results
+    return results
 
 # ======================
 # VOICE CLONE
 # ======================
 
 @app.post("/clone")
-
 async def clone(file:UploadFile):
 
- path=f"{VOICE_DIR}/{file.filename}"
+    path=f"{VOICE_DIR}/{file.filename}"
 
- with open(path,"wb") as f:
+    with open(path,"wb") as f:
+        f.write(await file.read())
 
-  f.write(await file.read())
+    return {"status":"voice added"}
 
- return {"status":"voice added"}
+# ======================
+# AI CHAT BIBLICO
+# ======================
+
+@app.post("/ai-chat")
+def ai_chat(req:ChatRequest):
+
+    response_text=f"Respuesta bíblica a: {req.message}"
+
+    voice_path=f"{VOICE_DIR}/{req.voice}"
+
+    with tempfile.NamedTemporaryFile(suffix=".mp3") as tmp:
+
+        tts.tts_to_file(
+            text=response_text,
+            speaker_wav=voice_path,
+            language=req.language,
+            file_path=tmp.name
+        )
+
+        object_name=f"chat_{uuid.uuid4()}.mp3"
+
+        s3.upload_file(tmp.name,BUCKET,object_name)
+
+    url=f"{PUBLIC_URL}/{object_name}"
+
+    return {
+        "text":response_text,
+        "audio_url":url
+    }
+
+# ======================
+# DYNAMIC READING
+# ======================
+
+@app.post("/dynamic-reading")
+def dynamic_reading(data:DynamicReading):
+
+    full_text=" ".join(data.verses)
+
+    voice_path=f"{VOICE_DIR}/{data.voice}"
+
+    with tempfile.NamedTemporaryFile(suffix=".mp3") as tmp:
+
+        tts.tts_to_file(
+            text=full_text,
+            speaker_wav=voice_path,
+            language=data.language,
+            file_path=tmp.name
+        )
+
+        object_name=f"reading_{uuid.uuid4()}.mp3"
+
+        s3.upload_file(tmp.name,BUCKET,object_name)
+
+    url=f"{PUBLIC_URL}/{object_name}"
+
+    return {"audio_url":url}

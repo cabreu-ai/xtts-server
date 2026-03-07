@@ -50,16 +50,7 @@ background:#374151;
 flex:1;
 padding:40px;
 max-width:900px;
-}
-
-input,select{
-background:#1e293b;
-border:none;
-border-radius:8px;
-padding:10px;
-color:white;
-margin-right:10px;
-margin-top:10px;
+overflow:auto;
 }
 
 textarea{
@@ -86,22 +77,9 @@ cursor:pointer;
 margin-right:10px;
 }
 
-button:hover{
-background:#4f46e5;
-}
-
 audio{
-margin-top:30px;
+margin-top:20px;
 width:100%;
-}
-
-.status{
-margin-top:15px;
-color:#9ca3af;
-}
-
-.upload{
-margin-top:30px;
 }
 
 </style>
@@ -111,9 +89,7 @@ margin-top:30px;
 <body>
 
 <header>
-
 Biblia AI Voice Studio
-
 </header>
 
 <div class="container">
@@ -124,10 +100,9 @@ Biblia AI Voice Studio
 
 <div id="voices"></div>
 
-<div class="upload">
+<div>
 
 <input type="file" id="voiceUpload">
-
 <button onclick="uploadVoice()">Upload Voice</button>
 
 </div>
@@ -138,34 +113,33 @@ Biblia AI Voice Studio
 
 <h2>Generate Verse</h2>
 
-<div>
-
-<select id="bible">
-
-<option value="RVR1960">Reina Valera</option>
-<option value="KJV">King James</option>
-
-</select>
-
-<input id="book" placeholder="Book">
-
-<input id="chapter" placeholder="Chapter" type="number">
-
-<input id="verse" placeholder="Verse" type="number">
-
-</div>
-
-<textarea id="text" placeholder="Verse text"></textarea>
-
-<br>
+<textarea id="text"></textarea>
 
 <button onclick="generate()">Generate</button>
 
-<button onclick="generateChapter()">Generate Chapter</button>
-
-<div class="status" id="status"></div>
-
 <audio id="player" controls></audio>
+
+<hr>
+
+<h2>Biblical AI Chat</h2>
+
+<input id="chatInput" placeholder="Ask something about the Bible">
+
+<button onclick="chat()">Ask</button>
+
+<div id="chatResponse"></div>
+
+<audio id="chatPlayer" controls></audio>
+
+<hr>
+
+<h2>Dynamic Reading</h2>
+
+<textarea id="readingText" placeholder="Paste verses"></textarea>
+
+<button onclick="dynamicReading()">Read</button>
+
+<audio id="readingPlayer" controls></audio>
 
 </div>
 
@@ -178,19 +152,15 @@ let selectedVoice="default"
 async function loadVoices(){
 
 let res=await fetch("/voices")
-
 let data=await res.json()
 
 let container=document.getElementById("voices")
-
 container.innerHTML=""
 
 data.forEach(v=>{
 
 let div=document.createElement("div")
-
 div.className="voice"
-
 div.innerText=v
 
 div.onclick=()=>{
@@ -207,18 +177,25 @@ container.appendChild(div)
 
 async function generate(){
 
-let status=document.getElementById("status")
-
-status.innerText="Generating..."
-
 let text=document.getElementById("text").value
 
-let bible=document.getElementById("bible").value
-let book=document.getElementById("book").value
-let chapter=document.getElementById("chapter").value
-let verse=document.getElementById("verse").value
+let res=await fetch("/stream?voice="+selectedVoice+"&text="+encodeURIComponent(text))
 
-let res=await fetch("/verse-audio",{
+let data=await res.json()
+
+let player=document.getElementById("player")
+
+player.src=data.audio_file
+
+player.play()
+
+}
+
+async function chat(){
+
+let msg=document.getElementById("chatInput").value
+
+let res=await fetch("/ai-chat",{
 
 method:"POST",
 
@@ -228,13 +205,8 @@ headers:{
 
 body:JSON.stringify({
 
-bible:bible,
-book:book,
-chapter:parseInt(chapter),
-verse:parseInt(verse),
-voice:selectedVoice,
-language:"es",
-text:text
+message:msg,
+voice:selectedVoice
 
 })
 
@@ -242,56 +214,17 @@ text:text
 
 let data=await res.json()
 
-let player=document.getElementById("player")
+document.getElementById("chatResponse").innerText=data.text
 
-player.src=data.audio_url
-
-if(data.cached){
-
-status.innerText="Loaded from cache"
-
-}else{
-
-status.innerText="Generated new audio"
+document.getElementById("chatPlayer").src=data.audio_url
 
 }
 
-}
+async function dynamicReading(){
 
-async function generateChapter(){
+let verses=document.getElementById("readingText").value.split("\n")
 
-let status=document.getElementById("status")
-
-status.innerText="Generating chapter..."
-
-let bible=document.getElementById("bible").value
-let book=document.getElementById("book").value
-let chapter=document.getElementById("chapter").value
-let text=document.getElementById("text").value
-
-let verses=text.split("\n")
-
-let payload={
-bible:bible,
-book:book,
-chapter:parseInt(chapter),
-voice:selectedVoice,
-language:"es",
-verses:[]
-}
-
-verses.forEach((v,i)=>{
-
-payload.verses.push({
-
-verse:i+1,
-text:v
-
-})
-
-})
-
-await fetch("/generate-chapter",{
+let res=await fetch("/dynamic-reading",{
 
 method:"POST",
 
@@ -299,11 +232,20 @@ headers:{
 "Content-Type":"application/json"
 },
 
-body:JSON.stringify(payload)
+body:JSON.stringify({
+
+bible:"RVR1960",
+voice:selectedVoice,
+language:"es",
+verses:verses
 
 })
 
-status.innerText="Chapter generated"
+})
+
+let data=await res.json()
+
+document.getElementById("readingPlayer").src=data.audio_url
 
 }
 
@@ -331,5 +273,4 @@ loadVoices()
 </script>
 
 </body>
-
 </html>
