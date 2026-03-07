@@ -4,7 +4,7 @@ import hashlib
 import tempfile
 
 from fastapi import FastAPI, UploadFile
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from pydantic import BaseModel
 
 from TTS.api import TTS
@@ -24,9 +24,12 @@ def home():
 # ======================
 
 VOICE_DIR = "/app/voices"
+OUTPUT_DIR = "/app/outputs"
+
 MODEL = "tts_models/multilingual/multi-dataset/xtts_v2"
 
 os.makedirs(VOICE_DIR, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ======================
 # LOAD MODEL
@@ -55,6 +58,7 @@ PUBLIC_URL = os.getenv("MINIO_PUBLIC_URL")
 # ======================
 
 DB_URL = f"postgresql://{os.getenv('POSTGRES_USER')}:{os.getenv('POSTGRES_PASSWORD')}@{os.getenv('POSTGRES_HOST')}/{os.getenv('POSTGRES_DB')}"
+
 engine = create_engine(DB_URL)
 
 # ======================
@@ -70,10 +74,12 @@ class VerseRequest(BaseModel):
     language:str
     text:str
 
+
 class ChatRequest(BaseModel):
     message:str
     voice:str
     language:str="es"
+
 
 class DynamicReading(BaseModel):
     bible:str
@@ -81,11 +87,13 @@ class DynamicReading(BaseModel):
     language:str
     verses:list
 
+
 # ======================
 # HASH
 # ======================
 
 def generate_hash(req):
+
     key="|".join([
         req.bible,
         req.book,
@@ -95,7 +103,9 @@ def generate_hash(req):
         req.language,
         req.text
     ])
+
     return hashlib.sha256(key.encode()).hexdigest()
+
 
 # ======================
 # LIST VOICES
@@ -104,6 +114,7 @@ def generate_hash(req):
 @app.get("/voices")
 def voices():
     return os.listdir(VOICE_DIR)
+
 
 # ======================
 # STREAM (sin cache)
@@ -114,16 +125,22 @@ def stream(text:str,voice:str="default",language:str="es"):
 
     voice_path=f"{VOICE_DIR}/{voice}"
 
-    with tempfile.NamedTemporaryFile(suffix=".mp3",delete=False) as tmp:
+    file_id=str(uuid.uuid4())
+    output_file=f"{OUTPUT_DIR}/{file_id}.mp3"
 
-        tts.tts_to_file(
-            text=text,
-            speaker_wav=voice_path,
-            language=language,
-            file_path=tmp.name
-        )
+    tts.tts_to_file(
+        text=text,
+        speaker_wav=voice_path,
+        language=language,
+        file_path=output_file
+    )
 
-        return JSONResponse({"audio_file":tmp.name})
+    return FileResponse(
+        output_file,
+        media_type="audio/mpeg",
+        filename="audio.mp3"
+    )
+
 
 # ======================
 # GENERATE AUDIO (cache)
@@ -134,34 +151,32 @@ def generate(req:VerseRequest):
 
     h=generate_hash(req)
 
-    with engine.connect() as conn:
+    with engine.begin() as conn:
 
         row=conn.execute(
             text("SELECT audio_url FROM tts_audio WHERE hash=:h"),
             {"h":h}
         ).fetchone()
 
-    if row:
-        return {"audio_url":row[0],"cached":True}
+        if row:
+            return {"audio_url":row[0],"cached":True}
 
-    voice_path=f"{VOICE_DIR}/{req.voice}"
+        voice_path=f"{VOICE_DIR}/{req.voice}"
 
-    with tempfile.NamedTemporaryFile(suffix=".mp3") as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".mp3") as tmp:
 
-        tts.tts_to_file(
-            text=req.text,
-            speaker_wav=voice_path,
-            language=req.language,
-            file_path=tmp.name
-        )
+            tts.tts_to_file(
+                text=req.text,
+                speaker_wav=voice_path,
+                language=req.language,
+                file_path=tmp.name
+            )
 
-        object_name=f"{h}.mp3"
+            object_name=f"{h}.mp3"
 
-        s3.upload_file(tmp.name,BUCKET,object_name)
+            s3.upload_file(tmp.name,BUCKET,object_name)
 
-    url=f"{PUBLIC_URL}/{object_name}"
-
-    with engine.connect() as conn:
+        url=f"{PUBLIC_URL}/{object_name}"
 
         conn.execute(
             text("""
@@ -184,6 +199,7 @@ def generate(req:VerseRequest):
         )
 
     return {"audio_url":url,"cached":False}
+
 
 # ======================
 # GENERATE CHAPTER
@@ -210,6 +226,7 @@ def generate_chapter(data):
 
     return results
 
+
 # ======================
 # VOICE CLONE
 # ======================
@@ -223,6 +240,7 @@ async def clone(file:UploadFile):
         f.write(await file.read())
 
     return {"status":"voice added"}
+
 
 # ======================
 # AI CHAT BIBLICO
@@ -254,6 +272,7 @@ def ai_chat(req:ChatRequest):
         "text":response_text,
         "audio_url":url
     }
+
 
 # ======================
 # DYNAMIC READING
