@@ -387,6 +387,53 @@ async def clone(file: UploadFile):
         f.write(await file.read())
     return {"status": "voice added"}
 
+
+@app.get("/debug-verse")
+def debug_verse(text: str = "Dios es amor", voice: str = "default", language: str = "es"):
+    """Step by step debug: TTS -> MinIO -> DB"""
+    import traceback
+    result = {"step_tts": None, "step_minio": None, "step_db": None}
+
+    # STEP 1: TTS
+    try:
+        voice_path = f"{VOICE_DIR}/{voice}"
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp_name = tmp.name
+        tts_chunks_to_file(text=text, voice_path=voice_path, language=language, output_file=tmp_name)
+        size = os.path.getsize(tmp_name)
+        result["step_tts"] = f"OK - file size: {size} bytes at {tmp_name}"
+    except Exception as e:
+        result["step_tts"] = f"ERROR: {traceback.format_exc()}"
+        return result
+
+    # STEP 2: MinIO upload
+    try:
+        object_name = f"debug_test_{uuid.uuid4()}.wav"
+        s3.upload_file(tmp_name, BUCKET, object_name)
+        url = get_audio_url(object_name)
+        result["step_minio"] = f"OK - url: {url}"
+        os.remove(tmp_name)
+    except Exception as e:
+        result["step_minio"] = f"ERROR: {traceback.format_exc()}"
+        return result
+
+    # STEP 3: DB insert
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO tts_audio (id,bible,book,chapter,verse,voice,language,hash,audio_url)
+                VALUES (:id,:b,:bo,:c,:v,:vo,:l,:h,:u)
+            """), {
+                "id": uuid.uuid4(), "b": "DEBUG", "bo": "Debug",
+                "c": 0, "v": 0, "vo": voice, "l": language,
+                "h": f"debug_{uuid.uuid4()}", "u": url
+            })
+        result["step_db"] = "OK - inserted"
+    except Exception as e:
+        result["step_db"] = f"ERROR: {traceback.format_exc()}"
+
+    return result
+
 # ======================
 # AI CHAT BIBLICO
 # ======================
