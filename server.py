@@ -191,26 +191,35 @@ def split_text(text: str, max_chars: int = 200) -> list:
 
 def tts_chunks_to_file(text: str, voice_path: str, language: str, output_file: str):
     """
-    Generates audio splitting text in chunks and concatenating with pydub.
+    Generates audio splitting text in chunks and concatenating with scipy+numpy.
+    No pydub needed - scipy is already installed with TTS/torch.
     """
-    import pydub
+    import numpy as np
+    import scipy.io.wavfile as wavfile
+
     chunks = split_text(text)
     logger.info(f"TTS chunks: {len(chunks)} for text length {len(text)}")
+
     if len(chunks) == 1:
         tts.tts_to_file(text=chunks[0], speaker_wav=voice_path, language=language, file_path=output_file)
         return
-    segments = []
+
     tmp_files = []
-    for i, chunk in enumerate(chunks):
+    arrays = []
+    sample_rate = None
+
+    for chunk in chunks:
         tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
         tmp.close()
         tts.tts_to_file(text=chunk, speaker_wav=voice_path, language=language, file_path=tmp.name)
-        segments.append(pydub.AudioSegment.from_wav(tmp.name))
+        sr, data = wavfile.read(tmp.name)
+        sample_rate = sr
+        arrays.append(data)
         tmp_files.append(tmp.name)
-    combined = segments[0]
-    for seg in segments[1:]:
-        combined += seg
-    combined.export(output_file, format="mp3")
+
+    combined = np.concatenate(arrays)
+    wavfile.write(output_file, sample_rate, combined)
+
     for f in tmp_files:
         os.remove(f)
 
