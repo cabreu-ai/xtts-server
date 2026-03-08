@@ -162,6 +162,58 @@ def generate_hash(req):
     ])
     return hashlib.sha256(key.encode()).hexdigest()
 
+
+# ======================
+# CHUNK TEXT (XTTS limit ~250 tokens / ~900 chars)
+# ======================
+
+import re
+
+def split_text(text: str, max_chars: int = 200) -> list:
+    """
+    Splits text into chunks respecting sentence boundaries.
+    XTTS v2 crashes with texts longer than ~250 tokens.
+    """
+    sentences = re.split(r'(?<=[.!?;,]) +', text.strip())
+    chunks = []
+    current = ""
+    for sentence in sentences:
+        if len(current) + len(sentence) <= max_chars:
+            current += (" " if current else "") + sentence
+        else:
+            if current:
+                chunks.append(current.strip())
+            current = sentence
+    if current:
+        chunks.append(current.strip())
+    return chunks if chunks else [text]
+
+
+def tts_chunks_to_file(text: str, voice_path: str, language: str, output_file: str):
+    """
+    Generates audio splitting text in chunks and concatenating with pydub.
+    """
+    import pydub
+    chunks = split_text(text)
+    logger.info(f"TTS chunks: {len(chunks)} for text length {len(text)}")
+    if len(chunks) == 1:
+        tts.tts_to_file(text=chunks[0], speaker_wav=voice_path, language=language, file_path=output_file)
+        return
+    segments = []
+    tmp_files = []
+    for i, chunk in enumerate(chunks):
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp.close()
+        tts.tts_to_file(text=chunk, speaker_wav=voice_path, language=language, file_path=tmp.name)
+        segments.append(pydub.AudioSegment.from_wav(tmp.name))
+        tmp_files.append(tmp.name)
+    combined = segments[0]
+    for seg in segments[1:]:
+        combined += seg
+    combined.export(output_file, format="mp3")
+    for f in tmp_files:
+        os.remove(f)
+
 # ======================
 # HOME
 # ======================
@@ -210,12 +262,7 @@ def stream(text: str, voice: str = "default", language: str = "es"):
     file_id     = str(uuid.uuid4())
     output_file = f"{OUTPUT_DIR}/{file_id}.mp3"
 
-    tts.tts_to_file(
-        text=text,
-        speaker_wav=voice_path,
-        language=language,
-        file_path=output_file
-    )
+    tts_chunks_to_file(text=text, voice_path=voice_path, language=language, output_file=output_file)
 
     return JSONResponse({"audio_file": f"/outputs/{file_id}.mp3"})
 
@@ -244,12 +291,7 @@ def generate(req: VerseRequest):
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
         tmp_name = tmp.name
 
-    tts.tts_to_file(
-        text=req.text,
-        speaker_wav=voice_path,
-        language=req.language,
-        file_path=tmp_name
-    )
+    tts_chunks_to_file(text=req.text, voice_path=voice_path, language=req.language, output_file=tmp_name)
 
     object_name = f"{h}.mp3"
     s3.upload_file(tmp_name, BUCKET, object_name)
@@ -324,12 +366,7 @@ def ai_chat(req: ChatRequest):
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
         tmp_name = tmp.name
 
-    tts.tts_to_file(
-        text=response_text,
-        speaker_wav=voice_path,
-        language=req.language,
-        file_path=tmp_name
-    )
+    tts_chunks_to_file(text=response_text, voice_path=voice_path, language=req.language, output_file=tmp_name)
 
     object_name = f"chat_{uuid.uuid4()}.mp3"
     s3.upload_file(tmp_name, BUCKET, object_name)
@@ -371,12 +408,7 @@ def dynamic_reading(data: DynamicReading):
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
         tmp_name = tmp.name
 
-    tts.tts_to_file(
-        text=full_text,
-        speaker_wav=voice_path,
-        language=data.language,
-        file_path=tmp_name
-    )
+    tts_chunks_to_file(text=full_text, voice_path=voice_path, language=data.language, output_file=tmp_name)
 
     object_name = f"reading_{uuid.uuid4()}.mp3"
     s3.upload_file(tmp_name, BUCKET, object_name)
