@@ -2,14 +2,16 @@ import os
 import uuid
 import hashlib
 import tempfile
+import io
 
 from fastapi import FastAPI, UploadFile
-from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from TTS.api import TTS
 
 import boto3
+from botocore.exceptions import ClientError
 from sqlalchemy import create_engine, text
 
 app = FastAPI()
@@ -322,6 +324,55 @@ def bible_audio(bible:str="NVI", book:str="", chapter:int=0, verse:int=0):
     object_name=f"{bible}_{book}_{chapter}_{verse:03d}.mp3"
     url=f"{PUBLIC_URL}/{object_name}"
     return {"audio_url":url,"cached":False,"note":"audio not yet generated"}
+
+
+@app.get("/stream-verse")
+def stream_verse(bible:str="NVI", book:str="", chapter:int=0, verse:int=0):
+    """
+    Proxy que descarga el MP3 desde MinIO usando las credenciales del servidor
+    y lo devuelve directamente al cliente.
+
+    El bucket MinIO puede ser privado — el cliente Android nunca necesita
+    credenciales propias.
+
+    Ejemplo: GET /stream-verse?bible=NVI&book=Gen&chapter=1&verse=3
+    """
+    # Buscar en DB primero (tiene el object_name real del hash)
+    object_name = None
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT audio_url FROM tts_audio WHERE bible=:b AND book=:bo AND chapter=:c AND verse=:v"),
+            {"b":bible,"bo":book,"c":chapter,"v":verse}
+        ).fetchone()
+
+    if row:
+        # audio_url tiene formato: {PUBLIC_URL}/{object_name}
+        audio_url = row[0]
+        object_name = audio_url.replace(PUBLIC_URL + "/", "").replace(PUBLIC_URL, "")
+    else:
+        # Construcción por nomenclatura estándar
+        object_name = f"{bible}_{book}_{chapter}_{verse:03d}.mp3"
+
+    try:
+        buf = io.BytesIO()
+        s3.download_fileobj(BUCKET, object_name, buf)
+        buf.seek(0)
+        return StreamingResponse(
+            buf,
+            media_type="audio/mpeg",
+            headers={"Content-Disposition": f"inline; filename={object_name}"},
+        )
+    except ClientError as e:
+        code = e.response["Error"]["Code"]
+        if code in ("NoSuchKey", "404"):
+            return JSONResponse(
+                status_code=404,
+                content={"error": "audio not found", "object": object_name}
+            )
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
 
 
 @app.get("/bible-chapter")
