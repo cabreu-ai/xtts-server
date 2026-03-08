@@ -191,8 +191,9 @@ def split_text(text: str, max_chars: int = 200) -> list:
 
 def tts_chunks_to_file(text: str, voice_path: str, language: str, output_file: str):
     """
-    Generates audio splitting text in chunks and concatenating with scipy+numpy.
-    No pydub needed - scipy is already installed with TTS/torch.
+    Splits text into chunks, generates WAV per chunk, concatenates
+    raw PCM bytes and writes final WAV. Works without pydub.
+    output_file can be .wav or .mp3 - XTTS writes WAV natively.
     """
     import numpy as np
     import scipy.io.wavfile as wavfile
@@ -200,8 +201,13 @@ def tts_chunks_to_file(text: str, voice_path: str, language: str, output_file: s
     chunks = split_text(text)
     logger.info(f"TTS chunks: {len(chunks)} for text length {len(text)}")
 
+    # Always write to a .wav temp path first, then rename/move to output_file
+    wav_output = output_file if output_file.endswith(".wav") else output_file.replace(".mp3", ".wav")
+
     if len(chunks) == 1:
-        tts.tts_to_file(text=chunks[0], speaker_wav=voice_path, language=language, file_path=output_file)
+        tts.tts_to_file(text=chunks[0], speaker_wav=voice_path, language=language, file_path=wav_output)
+        if wav_output != output_file:
+            os.rename(wav_output, output_file)
         return
 
     tmp_files = []
@@ -218,7 +224,10 @@ def tts_chunks_to_file(text: str, voice_path: str, language: str, output_file: s
         tmp_files.append(tmp.name)
 
     combined = np.concatenate(arrays)
-    wavfile.write(output_file, sample_rate, combined)
+    wavfile.write(wav_output, sample_rate, combined)
+
+    if wav_output != output_file:
+        os.rename(wav_output, output_file)
 
     for f in tmp_files:
         os.remove(f)
@@ -239,17 +248,32 @@ def home():
 
 @app.get("/db-check")
 def db_check():
+    results = {}
+    for table in ["tts_audio", "chat_log", "reading_log"]:
+        try:
+            with engine.connect() as conn:
+                n = conn.execute(text(f"SELECT COUNT(*) FROM {table}")).fetchone()
+                results[table] = {"count": n[0], "status": "ok"}
+        except Exception as e:
+            results[table] = {"status": "error", "detail": str(e)}
+    return results
+
+@app.get("/db-test-insert")
+def db_test_insert():
+    """Test endpoint to verify DB inserts work correctly."""
+    test_id = uuid.uuid4()
     try:
-        with engine.connect() as conn:
-            result = conn.execute(text("SELECT COUNT(*) FROM tts_audio")).fetchone()
-            chats  = conn.execute(text("SELECT COUNT(*) FROM chat_log")).fetchone()
-            reads  = conn.execute(text("SELECT COUNT(*) FROM reading_log")).fetchone()
-        return {
-            "status": "ok",
-            "tts_audio_count": result[0],
-            "chat_log_count":  chats[0],
-            "reading_log_count": reads[0]
-        }
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO tts_audio (id,bible,book,chapter,verse,voice,language,hash,audio_url)
+                VALUES (:id,:b,:bo,:c,:v,:vo,:l,:h,:u)
+                ON CONFLICT (hash) DO NOTHING
+            """), {
+                "id": test_id, "b": "TEST", "bo": "Test",
+                "c": 1, "v": 1, "vo": "default", "l": "es",
+                "h": f"test_{test_id}", "u": "https://test.url/audio.wav"
+            })
+        return {"status": "ok", "inserted_id": str(test_id)}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
 
@@ -297,12 +321,12 @@ def generate(req: VerseRequest):
 
     voice_path = f"{VOICE_DIR}/{req.voice}"
 
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp_name = tmp.name
 
     tts_chunks_to_file(text=req.text, voice_path=voice_path, language=req.language, output_file=tmp_name)
 
-    object_name = f"{h}.mp3"
+    object_name = f"{h}.wav"
     s3.upload_file(tmp_name, BUCKET, object_name)
     os.remove(tmp_name)
 
@@ -372,12 +396,12 @@ def ai_chat(req: ChatRequest):
     response_text = f"Respuesta biblica a: {req.message}"
     voice_path    = f"{VOICE_DIR}/{req.voice}"
 
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp_name = tmp.name
 
     tts_chunks_to_file(text=response_text, voice_path=voice_path, language=req.language, output_file=tmp_name)
 
-    object_name = f"chat_{uuid.uuid4()}.mp3"
+    object_name = f"chat_{uuid.uuid4()}.wav"
     s3.upload_file(tmp_name, BUCKET, object_name)
     os.remove(tmp_name)
 
@@ -414,12 +438,12 @@ def dynamic_reading(data: DynamicReading):
     full_text  = " ".join(data.verses)
     voice_path = f"{VOICE_DIR}/{data.voice}"
 
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp_name = tmp.name
 
     tts_chunks_to_file(text=full_text, voice_path=voice_path, language=data.language, output_file=tmp_name)
 
-    object_name = f"reading_{uuid.uuid4()}.mp3"
+    object_name = f"reading_{uuid.uuid4()}.wav"
     s3.upload_file(tmp_name, BUCKET, object_name)
     os.remove(tmp_name)
 
