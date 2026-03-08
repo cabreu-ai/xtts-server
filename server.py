@@ -121,7 +121,7 @@ def voices():
 # ======================
 
 @app.get("/stream")
-def stream(text:str,voice:str="default",language:str="es"):
+def stream(text:str,voice:str="default.wav",language:str="es"):
 
     voice_path=f"{VOICE_DIR}/{voice}"
 
@@ -297,3 +297,77 @@ def dynamic_reading(data:DynamicReading):
     url=f"{PUBLIC_URL}/{object_name}"
 
     return {"audio_url":url}
+
+
+# ======================
+# BIBLE AUDIO (pregenerado)
+# ======================
+
+@app.get("/bible-audio")
+def bible_audio(bible:str="NVI", book:str="", chapter:int=0, verse:int=0):
+    """
+    Retorna la URL del audio pregenerado de un versiculo.
+    Ejemplo: GET /bible-audio?bible=NVI&book=John&chapter=3&verse=16
+    """
+    with engine.connect() as conn:
+        row=conn.execute(
+            text("SELECT audio_url FROM tts_audio WHERE bible=:b AND book=:bo AND chapter=:c AND verse=:v"),
+            {"b":bible,"bo":book,"c":chapter,"v":verse}
+        ).fetchone()
+
+    if row:
+        return {"audio_url":row[0],"cached":True}
+
+    # Si no esta en DB construir URL por nomenclatura
+    object_name=f"{bible}_{book}_{chapter}_{verse:03d}.mp3"
+    url=f"{PUBLIC_URL}/{object_name}"
+    return {"audio_url":url,"cached":False,"note":"audio not yet generated"}
+
+
+@app.get("/bible-chapter")
+def bible_chapter(bible:str="NVI", book:str="", chapter:int=0):
+    """
+    Retorna todas las URLs de audio de un capitulo completo.
+    Ejemplo: GET /bible-chapter?bible=NVI&book=John&chapter=3
+    """
+    with engine.connect() as conn:
+        rows=conn.execute(
+            text("""
+                SELECT verse, audio_url FROM tts_audio
+                WHERE bible=:b AND book=:bo AND chapter=:c
+                ORDER BY verse
+            """),
+            {"b":bible,"bo":book,"c":chapter}
+        ).fetchall()
+
+    return {
+        "bible":   bible,
+        "book":    book,
+        "chapter": chapter,
+        "total":   len(rows),
+        "verses":  [{"verse":r[0],"audio_url":r[1]} for r in rows]
+    }
+
+
+@app.get("/bible-books")
+def bible_books(bible:str="NVI"):
+    """
+    Retorna el progreso de generacion por libro.
+    Ejemplo: GET /bible-books?bible=NVI
+    """
+    with engine.connect() as conn:
+        rows=conn.execute(
+            text("""
+                SELECT book, COUNT(*) as generated
+                FROM tts_audio
+                WHERE bible=:b
+                GROUP BY book
+                ORDER BY book
+            """),
+            {"b":bible}
+        ).fetchall()
+
+    return {
+        "bible": bible,
+        "books": [{"book":r[0],"generated_verses":r[1]} for r in rows]
+    }
